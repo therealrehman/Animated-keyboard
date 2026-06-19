@@ -1,11 +1,13 @@
 import os
 
 def create_file(path, content):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dir_name = os.path.dirname(path)
+    if dir_name:  # Only create directory if path has a directory
+        os.makedirs(dir_name, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         f.write(content)
 
-# Build files
+# Root files
 create_file('build.gradle', '''// Top-level build file
 plugins {
     id 'com.android.application' version '8.2.0' apply false
@@ -40,11 +42,8 @@ create_file('.gitignore', '''*.iml
 .gradle
 /local.properties
 /.idea/
-.DS_Store/build
-/captures
-.externalNativeBuild
-.cxx
-''')
+.DS_Store
+/build''')
 
 create_file('app/build.gradle', '''plugins {
     id 'com.android.application'
@@ -85,6 +84,42 @@ dependencies {
 }
 ''')
 
-create_file('app/proguard-rules.pro', '# ProGuard rules\n')
+create_file('app/proguard-rules.pro', '# ProGuard\n')
 
-print("Basic files created!")
+create_file('app/src/main/AndroidManifest.xml', '''<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AnimatedKeyboard">        <service
+            android:name=".service.AnimatedKeyboardIME"
+            android:exported="true"
+            android:label="@string/keyboard_name"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+    </application>
+</manifest>
+''')
+
+create_file('app/src/main/res/values/strings.xml', '''<resources>
+    <string name="app_name">Animated Keyboard</string>
+    <string name="keyboard_name">Animated Keyboard</string>
+</resources>
+''')
+
+create_file('app/src/main/res/xml/method.xml', '''<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+    <subtype
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard" />
+</input-method>
+''')
+
+print("Files created successfully!")
