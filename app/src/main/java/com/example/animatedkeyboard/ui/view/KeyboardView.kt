@@ -39,7 +39,8 @@ class KeyboardView @JvmOverloads constructor(
 
     private val keyPaint = Paint()
     private val keyBorderPaint = Paint()
-    private val textPaint = Paint()    private val animationEngine = AnimationEngine()
+    private val textPaint = Paint()
+    private val animationEngine = AnimationEngine()
     private var lastFrameTime = 0L
     private var fireGlowAlpha = 0.5f
     private var fireGlowDirection = -1
@@ -88,7 +89,8 @@ class KeyboardView @JvmOverloads constructor(
         keyPaint.color = Color.parseColor("#080808")
         keyPaint.isAntiAlias = true
         keyPaint.style = Paint.Style.FILL
-        keyBorderPaint.color = Color.parseColor("#1A1A1A")        keyBorderPaint.isAntiAlias = true
+        keyBorderPaint.color = Color.parseColor("#1A1A1A")
+        keyBorderPaint.isAntiAlias = true
         keyBorderPaint.style = Paint.Style.STROKE
         keyBorderPaint.strokeWidth = 2f
         textPaint.color = Color.parseColor("#885500")
@@ -104,7 +106,7 @@ class KeyboardView @JvmOverloads constructor(
         popupBorderPaint.style = Paint.Style.STROKE
         popupBorderPaint.strokeWidth = 3f
         popupTextPaint.color = Color.parseColor("#FFCC00")
-        popupTextPaint.textSize = 65f  // Increased popup text size (was 52f)
+        popupTextPaint.textSize = 65f // Increased popup text size (was 52f)
         popupTextPaint.isAntiAlias = true
         popupTextPaint.textAlign = Paint.Align.CENTER
         popupTextPaint.isFakeBoldText = true
@@ -134,16 +136,19 @@ class KeyboardView @JvmOverloads constructor(
     private fun createKeyMap(width: Int, height: Int) {
         keyMap.clear()
         val padding = (width * 0.01).toInt()
-        val keyHeight = (height / 5).toInt()  // 5 rows now
+        val keyHeight = (height / 5).toInt() // 5 rows now
         val rowHeight = keyHeight + (padding / 2)
         var currentY = padding
-        for (row in currentLayout) {            val rowWidth = width - (padding * 2)
+
+        for (row in currentLayout) {
+            val rowWidth = width - (padding * 2)
             var totalWeight = 0.0
             for (item in row) {
                 totalWeight += getWeight(item).toDouble()
             }
             val tw = totalWeight.toFloat()
             var currentX = padding
+
             for (keyLabel in row) {
                 val kw = (rowWidth * (getWeight(keyLabel) / tw)).roundToInt()
                 val skw = minOf(kw, width - currentX - padding)
@@ -169,6 +174,7 @@ class KeyboardView @JvmOverloads constructor(
         val now = System.currentTimeMillis()
         val dt = if (lastFrameTime == 0L) 16 else now - lastFrameTime
         lastFrameTime = now
+
         canvas.drawColor(0x00000000)
         drawFireGlow(canvas)
         animationEngine.update(dt)
@@ -186,7 +192,8 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun drawFireGlow(canvas: Canvas) {
         fireGlowAlpha += fireGlowDirection * 0.005f
-        if (fireGlowAlpha <= 0.3f || fireGlowAlpha >= 0.7f) {            fireGlowDirection *= -1
+        if (fireGlowAlpha <= 0.3f || fireGlowAlpha >= 0.7f) {
+            fireGlowDirection *= -1
         }
         val cx = width / 2f
         val cy = height.toFloat()
@@ -225,7 +232,7 @@ class KeyboardView @JvmOverloads constructor(
             val elapsed = now - entry.value
             val ns = when {
                 elapsed < 70 -> KeyState.WHITE
-                elapsed < 140 -> KeyState.PINK  // Removed CYAN, now WHITE -> PINK
+                elapsed < 140 -> KeyState.PINK // Removed CYAN, now WHITE -> PINK
                 elapsed < 210 -> KeyState.PINK
                 elapsed < 410 -> KeyState.FADE
                 else -> KeyState.NORMAL
@@ -236,8 +243,10 @@ class KeyboardView @JvmOverloads constructor(
             }
         }
     }
+
     private fun drawKey(canvas: Canvas, label: String, rect: Rect) {
         val state = keyStates[label] ?: KeyState.NORMAL
+
         when (state) {
             KeyState.WHITE -> {
                 keyPaint.color = Color.WHITE
@@ -260,16 +269,17 @@ class KeyboardView @JvmOverloads constructor(
                 keyPaint.clearShadowLayer()
             }
         }
+
         val l = rect.left.toFloat()
         val t = rect.top.toFloat()
         val r = rect.right.toFloat()
         val b = rect.bottom.toFloat()
-        
+
         // Reduced key background size to 70% (was 100%)
-        val keyMargin = ((r - l) * 0.15f)  // 15% margin on each side = 30% total reduction
+        val keyMargin = ((r - l) * 0.15f) // 15% margin on each side = 30% total reduction
         canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, 12f, 12f, keyPaint)
         canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, 12f, 12f, keyBorderPaint)
-        
+
         val dl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
         canvas.drawText(dl, rect.exactCenterX(), rect.exactCenterY() + (textPaint.textSize / 3f), textPaint)
     }
@@ -284,7 +294,8 @@ class KeyboardView @JvmOverloads constructor(
                 isLongPress = false
                 handleTouchDown(event.x, event.y)
                 return true
-            }            MotionEvent.ACTION_MOVE -> {
+            }
+            MotionEvent.ACTION_MOVE -> {
                 val dx = event.x - touchStartX
                 val dy = event.y - touchStartY
                 val dist = sqrt((dx * dx + dy * dy).toDouble()).toFloat()
@@ -333,19 +344,21 @@ class KeyboardView @JvmOverloads constructor(
                 ripples.add(RippleEffect(rect.exactCenterX(), rect.exactCenterY()))
                 currentPopup = PopupEffect(label, rect.exactCenterX(), rect.top.toFloat() - 55f)
                 pressedKeys[label] = System.currentTimeMillis()
-                postInvalidateOnAnimation()                
+                postInvalidateOnAnimation()
+
                 // Handle long press for backspace
                 if (label == "Del") {
                     isLongPress = true
                     longPressKey = label
-                    handler.postDelayed(object : Runnable {
+                    backspaceRunnable = object : Runnable {
                         override fun run() {
                             if (isLongPress && longPressKey == "Del") {
                                 keyListener?.onKey(-5, "Del")
-                                handler.postDelayed(this, 50)  // Repeat every 50ms
+                                handler.postDelayed(this, 50) // Repeat every 50ms
                             }
                         }
-                    }, 500)  // Start after 500ms long press
+                    }
+                    handler.postDelayed(backspaceRunnable!!, 500) // Start after 500ms long press
                 }
                 break
             }
@@ -382,8 +395,10 @@ class KeyboardView @JvmOverloads constructor(
                 createKeyMap(width, height)
                 postInvalidateOnAnimation()
             }
-            else -> {                val fl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
+            else -> {
+                val fl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
                 keyListener?.onKey(fl.hashCode(), fl)
+
                 if (isShifted && label[0].isLetter()) {
                     isShifted = false
                     postInvalidateOnAnimation()
@@ -399,6 +414,7 @@ class KeyboardView @JvmOverloads constructor(
         private val maxR = 100f
         private val dur = 500L
         private val start = System.currentTimeMillis()
+
         fun update(dt: Long) {
             val p = (System.currentTimeMillis() - start).toFloat() / dur.toFloat()
             if (p >= 1.0f) {
@@ -408,6 +424,7 @@ class KeyboardView @JvmOverloads constructor(
             radius = maxR * p
             alp = (255 * (1 - p)).toInt()
         }
+
         fun draw(canvas: Canvas) {
             val pt = Paint()
             pt.isAntiAlias = true
@@ -422,6 +439,7 @@ class KeyboardView @JvmOverloads constructor(
         var finished = false
         private val dur = 250L
         private val start = System.currentTimeMillis()
+
         fun draw(canvas: Canvas) {
             val p = (System.currentTimeMillis() - start).toFloat() / dur.toFloat()
             if (p >= 1.0f) {
@@ -431,10 +449,11 @@ class KeyboardView @JvmOverloads constructor(
             if (p < 0.2f) {
                 offY = 10f - (10f * (p / 0.2f))
                 alp = 255
-            } else {                alp = (255 * (1 - (p - 0.2f) / 0.8f)).toInt()
+            } else {
+                alp = (255 * (1 - (p - 0.2f) / 0.8f)).toInt()
             }
-            val pw = 100f  // Increased from 80f
-            val ph = 80f   // Increased from 60f
+            val pw = 100f // Increased from 80f
+            val ph = 80f // Increased from 60f
             popupPaint.alpha = alp
             canvas.drawRoundRect(px - pw / 2, py + offY, px + pw / 2, py + offY + ph, 15f, 15f, popupPaint)
             popupBorderPaint.alpha = alp
