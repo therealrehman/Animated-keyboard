@@ -27,7 +27,7 @@ class KeyboardView @JvmOverloads constructor(
 
     private var keyListener: OnKeyListener? = null
 
-    fun setOnKeyListener(listener: OnKeyListener) {
+    fun setOnCustomKeyListener(listener: OnKeyListener) {
         this.keyListener = listener
     }
 
@@ -133,7 +133,8 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun createKeyMap(width: Int, height: Int) {
-        keyMap.clear()        val padding = (width * 0.01).toInt()
+        keyMap.clear()
+        val padding = (width * 0.01).toInt()
         val keyHeight = (height / 4).toInt()
         val rowHeight = keyHeight + (padding / 2)
         var currentY = padding
@@ -182,7 +183,8 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun updateAndDrawFireGlow(canvas: Canvas, deltaTime: Long) {
-        fireGlowAlpha += fireGlowDirection * 0.005f        if (fireGlowAlpha <= 0.3f || fireGlowAlpha >= 0.7f) { fireGlowDirection *= -1 }
+        fireGlowAlpha += fireGlowDirection * 0.005f
+        if (fireGlowAlpha <= 0.3f || fireGlowAlpha >= 0.7f) { fireGlowDirection *= -1 }
         val centerX = width / 2f
         val centerY = height.toFloat()
         val a1 = (255 * fireGlowAlpha).toInt()
@@ -231,7 +233,8 @@ class KeyboardView @JvmOverloads constructor(
             KeyState.WHITE -> {
                 keyPaint.color = Color.WHITE
                 textPaint.color = Color.BLACK
-                keyPaint.setShadowLayer(35f, 0f, 0f, Color.WHITE)            }
+                keyPaint.setShadowLayer(35f, 0f, 0f, Color.WHITE)
+            }
             KeyState.CYAN -> {
                 keyPaint.color = Color.CYAN
                 textPaint.color = Color.BLACK
@@ -280,7 +283,8 @@ class KeyboardView @JvmOverloads constructor(
                 val distance = sqrt((dx * dx + dy * dy).toDouble()).toFloat()
                 if (distance > swipeThreshold) { isSwiping = true }
                 if (!isSwiping) { handleTouchDown(event.x, event.y) }
-                else { handleSwipeAnimation(event.x, event.y) }                return true
+                else { handleSwipeAnimation(event.x, event.y) }
+                return true
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!isSwiping && lastTouchedKey != null) {
@@ -329,7 +333,8 @@ class KeyboardView @JvmOverloads constructor(
                 isShifted = !isShifted
                 postInvalidateOnAnimation()
             }
-            "Back" -> keyListener?.onKey(-5, "Back")            "Enter" -> keyListener?.onKey(-4, "Enter")
+            "Back" -> keyListener?.onKey(-5, "Back")
+            "Enter" -> keyListener?.onKey(-4, "Enter")
             "Space" -> keyListener?.onKey(32, "Space")
             "123" -> {
                 currentLayout = numberLayout
@@ -378,7 +383,8 @@ class KeyboardView @JvmOverloads constructor(
 
     private inner class PopupEffect(private val label: String, private val px: Float, private val py: Float) {
         private var alpha = 255
-        private var offsetY = 10f        var isFinished = false
+        private var offsetY = 10f
+        var isFinished = false
             private set
         private val durationMs = 250L
         private var startTime = System.currentTimeMillis()
