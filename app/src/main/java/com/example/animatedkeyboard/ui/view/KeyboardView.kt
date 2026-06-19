@@ -37,6 +37,21 @@ class KeyboardView @JvmOverloads constructor(
         this.keyListener = listener
     }
 
+    // --- DP-based sizing system ---
+    // All spacing/sizing constants are defined in dp and converted to px using
+    // the device's display density, so the keyboard looks correctly
+    // proportioned on every screen size/density (mdpi, hdpi, xhdpi, etc.)
+    private val density = context.resources.displayMetrics.density
+    private fun dp(value: Float): Float = value * density
+
+    private val horizontalKeyGapDp = 4f   // gap between keys in the same row
+    private val verticalRowGapDp = 6f     // gap between rows
+    private val sideMarginDp = 3f         // left/right edge margin of keyboard
+    private val topBottomMarginDp = 4f    // top/bottom edge margin of keyboard
+    private val keyCornerRadiusDp = 5f    // rounded corner radius on keys
+    private val keyboardHeightFraction = 0.38 // ~38% of screen height (was 24%)
+    private val spaceRowHeightFactor = 0.88f  // bottom row slightly shorter than others
+
     private val keyPaint = Paint()
     private val keyBorderPaint = Paint()
     private val textPaint = Paint()
@@ -92,9 +107,9 @@ class KeyboardView @JvmOverloads constructor(
         keyBorderPaint.color = Color.parseColor("#1A1A1A")
         keyBorderPaint.isAntiAlias = true
         keyBorderPaint.style = Paint.Style.STROKE
-        keyBorderPaint.strokeWidth = 2f
+        keyBorderPaint.strokeWidth = dp(1f)
         textPaint.color = Color.parseColor("#885500")
-        textPaint.textSize = 42f
+        textPaint.textSize = dp(15f)
         textPaint.isAntiAlias = true
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.typeface = Typeface.DEFAULT_BOLD
@@ -104,9 +119,9 @@ class KeyboardView @JvmOverloads constructor(
         popupBorderPaint.color = Color.parseColor("#FFAA00")
         popupBorderPaint.isAntiAlias = true
         popupBorderPaint.style = Paint.Style.STROKE
-        popupBorderPaint.strokeWidth = 3f
+        popupBorderPaint.strokeWidth = dp(1.5f)
         popupTextPaint.color = Color.parseColor("#FFCC00")
-        popupTextPaint.textSize = 65f // Increased popup text size (was 52f)
+        popupTextPaint.textSize = dp(22f) // Magnified popup text, density-independent
         popupTextPaint.isAntiAlias = true
         popupTextPaint.textAlign = Paint.Align.CENTER
         popupTextPaint.isFakeBoldText = true
@@ -121,7 +136,7 @@ class KeyboardView @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = View.MeasureSpec.getSize(widthMeasureSpec)
         val dm = context.resources.displayMetrics
-        val desiredHeight = (dm.heightPixels * 0.24).toInt()
+        val desiredHeight = (dm.heightPixels * keyboardHeightFraction).toInt()
         super.onMeasure(
             View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(desiredHeight, View.MeasureSpec.EXACTLY)
@@ -135,36 +150,52 @@ class KeyboardView @JvmOverloads constructor(
 
     private fun createKeyMap(width: Int, height: Int) {
         keyMap.clear()
-        val padding = (width * 0.01).toInt()
-        val keyHeight = (height / 5).toInt() // 5 rows now
-        val rowHeight = keyHeight + (padding / 2)
-        var currentY = padding
 
-        for (row in currentLayout) {
-            val rowWidth = width - (padding * 2)
+        val sideMargin = dp(sideMarginDp).toInt()
+        val topBottomMargin = dp(topBottomMarginDp).toInt()
+        val hGap = dp(horizontalKeyGapDp).toInt()
+        val vGap = dp(verticalRowGapDp).toInt()
+
+        val rowCount = currentLayout.size
+        val availableHeight = height - (topBottomMargin * 2) - (vGap * (rowCount - 1))
+
+        // Bottom row (space bar row) is slightly shorter; other rows share the rest equally.
+        // We compute a "unit" height so total height accounting for the shrink factor fits exactly.
+        val unitHeight = (availableHeight / (rowCount - 1 + spaceRowHeightFactor)).toInt()
+        val normalRowHeight = unitHeight
+        val lastRowHeight = (unitHeight * spaceRowHeightFactor).toInt()
+
+        var currentY = topBottomMargin
+
+        for ((rowIndex, row) in currentLayout.withIndex()) {
+            val isLastRow = rowIndex == currentLayout.lastIndex
+            val rowKeyHeight = if (isLastRow) lastRowHeight else normalRowHeight
+
+            val availableRowWidth = width - (sideMargin * 2) - (hGap * (row.size - 1))
             var totalWeight = 0.0
             for (item in row) {
                 totalWeight += getWeight(item).toDouble()
             }
             val tw = totalWeight.toFloat()
-            var currentX = padding
+            var currentX = sideMargin
 
-            for (keyLabel in row) {
-                val kw = (rowWidth * (getWeight(keyLabel) / tw)).roundToInt()
-                val skw = minOf(kw, width - currentX - padding)
-                keyMap[keyLabel] = Rect(currentX, currentY, currentX + skw, currentY + keyHeight)
+            for ((keyIndex, keyLabel) in row.withIndex()) {
+                val isLastKeyInRow = keyIndex == row.lastIndex
+                val kw = (availableRowWidth * (getWeight(keyLabel) / tw)).roundToInt()
+                val safeRight = if (isLastKeyInRow) (width - sideMargin) else (currentX + kw)
+                keyMap[keyLabel] = Rect(currentX, currentY, safeRight, currentY + rowKeyHeight)
                 keyStates[keyLabel] = KeyState.NORMAL
-                currentX += skw + (padding / 2)
+                currentX = safeRight + hGap
             }
-            currentY += rowHeight
+            currentY += rowKeyHeight + vGap
         }
     }
 
     private fun getWeight(label: String): Float {
         return when (label) {
             "Space" -> 3.5f
-            "Shift", "Del", "123", "ABC" -> 1.3f
-            "Go" -> 1.5f
+            "Shift", "Del", "123", "ABC" -> 1.4f
+            "Go" -> 1.4f
             else -> 1.0f
         }
     }
@@ -275,10 +306,12 @@ class KeyboardView @JvmOverloads constructor(
         val r = rect.right.toFloat()
         val b = rect.bottom.toFloat()
 
-        // Reduced key background size to 70% (was 100%)
-        val keyMargin = ((r - l) * 0.15f) // 15% margin on each side = 30% total reduction
-        canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, 12f, 12f, keyPaint)
-        canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, 12f, 12f, keyBorderPaint)
+        // Small inner shrink (5%) — visual breathing room within each key's own cell.
+        // Actual spacing between keys is handled by hGap/vGap in createKeyMap, not this shrink.
+        val keyMargin = ((r - l) * 0.05f)
+        val cornerRadius = dp(keyCornerRadiusDp)
+        canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, cornerRadius, cornerRadius, keyPaint)
+        canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, cornerRadius, cornerRadius, keyBorderPaint)
 
         val dl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
         canvas.drawText(dl, rect.exactCenterX(), rect.exactCenterY() + (textPaint.textSize / 3f), textPaint)
@@ -342,7 +375,7 @@ class KeyboardView @JvmOverloads constructor(
                 lastTouchedKey = label
                 animationEngine.triggerAnimation(rect.exactCenterX(), rect.exactCenterY(), label)
                 ripples.add(RippleEffect(rect.exactCenterX(), rect.exactCenterY()))
-                currentPopup = PopupEffect(label, rect.exactCenterX(), rect.top.toFloat() - 55f)
+                currentPopup = PopupEffect(label, rect.exactCenterX(), rect.top.toFloat() - dp(20f))
                 pressedKeys[label] = System.currentTimeMillis()
                 postInvalidateOnAnimation()
 
@@ -452,8 +485,8 @@ class KeyboardView @JvmOverloads constructor(
             } else {
                 alp = (255 * (1 - (p - 0.2f) / 0.8f)).toInt()
             }
-            val pw = 100f // Increased from 80f
-            val ph = 80f // Increased from 60f
+            val pw = dp(36f) // Magnified popup width, density-independent
+            val ph = dp(28f) // Magnified popup height, density-independent
             popupPaint.alpha = alp
             canvas.drawRoundRect(px - pw / 2, py + offY, px + pw / 2, py + offY + ph, 15f, 15f, popupPaint)
             popupBorderPaint.alpha = alp
