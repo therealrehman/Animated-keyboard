@@ -33,7 +33,7 @@ class KeyboardView @JvmOverloads constructor(
     private val handler = Handler(Looper.getMainLooper())
     private var backspaceRunnable: Runnable? = null
 
-    fun setOnKeyListener(listener: OnKeyListener) {
+    fun setOnCustomKeyListener(listener: OnKeyListener) {
         this.keyListener = listener
     }
 
