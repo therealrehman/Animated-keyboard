@@ -49,7 +49,7 @@ class KeyboardView @JvmOverloads constructor(
     private val sideMarginDp = 3f         // left/right edge margin of keyboard
     private val topBottomMarginDp = 4f    // top/bottom edge margin of keyboard
     private val keyCornerRadiusDp = 5f    // rounded corner radius on keys
-    private val keyboardHeightFraction = 0.38 // ~38% of screen height (was 24%)
+    private val keyboardHeightFraction = 0.304 // 80% of previous 38% height
     private val spaceRowHeightFactor = 0.88f  // bottom row slightly shorter than others
 
     private val keyPaint = Paint()
@@ -71,9 +71,9 @@ class KeyboardView @JvmOverloads constructor(
     // Numbers row added at top
     private val letterLayout = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
-        listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"),
-        listOf("A", "S", "D", "F", "G", "H", "J", "K", "L"),
-        listOf("Shift", "Z", "X", "C", "V", "B", "N", "M", "Del"),
+        listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
+        listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
+        listOf("Shift", "z", "x", "c", "v", "b", "n", "m", "Del"),
         listOf("123", ",", "Space", ".", "Go")
     )
 
@@ -100,7 +100,7 @@ class KeyboardView @JvmOverloads constructor(
 
     init {
         setWillNotDraw(false)
-        setBackgroundColor(0x00000000)
+        setBackgroundColor(Color.BLACK)
         keyPaint.color = Color.parseColor("#080808")
         keyPaint.isAntiAlias = true
         keyPaint.style = Paint.Style.FILL
@@ -116,11 +116,11 @@ class KeyboardView @JvmOverloads constructor(
         fireGlowPaint.isAntiAlias = true
         popupPaint.color = Color.parseColor("#1E1E1E")
         popupPaint.isAntiAlias = true
-        popupBorderPaint.color = Color.parseColor("#FFAA00")
+        popupBorderPaint.color = Color.WHITE
         popupBorderPaint.isAntiAlias = true
         popupBorderPaint.style = Paint.Style.STROKE
         popupBorderPaint.strokeWidth = dp(1.5f)
-        popupTextPaint.color = Color.parseColor("#FFCC00")
+        popupTextPaint.color = Color.WHITE
         popupTextPaint.textSize = dp(22f) // Magnified popup text, density-independent
         popupTextPaint.isAntiAlias = true
         popupTextPaint.textAlign = Paint.Align.CENTER
@@ -206,7 +206,7 @@ class KeyboardView @JvmOverloads constructor(
         val dt = if (lastFrameTime == 0L) 16 else now - lastFrameTime
         lastFrameTime = now
 
-        canvas.drawColor(0x00000000)
+        canvas.drawColor(Color.BLACK)
         drawFireGlow(canvas)
         animationEngine.update(dt)
         animationEngine.draw(canvas)
@@ -228,18 +228,15 @@ class KeyboardView @JvmOverloads constructor(
         }
         val cx = width / 2f
         val cy = height.toFloat()
-        val a1 = (255 * fireGlowAlpha).toInt()
-        val a2 = (180 * fireGlowAlpha).toInt()
-        val a3 = (100 * fireGlowAlpha).toInt()
-        val a4 = (40 * fireGlowAlpha).toInt()
+        val a1 = (220 * fireGlowAlpha).toInt()
+        val a2 = (90 * fireGlowAlpha).toInt()
+        // 2 shades of orange only: bright orange center, deep orange edge
         val colors = intArrayOf(
-            Color.argb(a1, 255, 80, 0),
-            Color.argb(a2, 255, 140, 0),
-            Color.argb(a3, 255, 200, 0),
-            Color.argb(a4, 255, 160, 0),
+            Color.argb(a1, 255, 140, 0),   // bright orange
+            Color.argb(a2, 200, 80, 0),    // deep orange
             Color.TRANSPARENT
         )
-        val pos = floatArrayOf(0f, 0.2f, 0.4f, 0.6f, 1f)
+        val pos = floatArrayOf(0f, 0.5f, 1f)
         fireGlowPaint.shader = RadialGradient(cx, cy, width * 0.8f, colors, pos, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fireGlowPaint)
     }
@@ -314,7 +311,66 @@ class KeyboardView @JvmOverloads constructor(
         canvas.drawRoundRect(l + keyMargin, t + keyMargin, r - keyMargin, b - keyMargin, cornerRadius, cornerRadius, keyBorderPaint)
 
         val dl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
-        canvas.drawText(dl, rect.exactCenterX(), rect.exactCenterY() + (textPaint.textSize / 3f), textPaint)
+
+        when (label) {
+            "Shift" -> drawShiftIcon(canvas, rect, textPaint.color)
+            "Del" -> drawBackspaceIcon(canvas, rect, textPaint.color)
+            else -> canvas.drawText(dl, rect.exactCenterX(), rect.exactCenterY() + (textPaint.textSize / 3f), textPaint)
+        }
+    }
+
+    private val iconPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.FILL
+    }
+
+    // Shift key icon: simple upward-pointing arrow (caps-lock style arrow)
+    private fun drawShiftIcon(canvas: Canvas, rect: Rect, color: Int) {
+        iconPaint.color = if (isShifted) Color.parseColor("#FFCC00") else color
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val s = minOf(rect.width(), rect.height()) * 0.22f // icon scale
+
+        val path = android.graphics.Path()
+        // Arrow head (triangle)
+        path.moveTo(cx, cy - s * 1.3f)
+        path.lineTo(cx + s, cy)
+        path.lineTo(cx + s * 0.45f, cy)
+        path.lineTo(cx + s * 0.45f, cy + s * 0.9f)
+        path.lineTo(cx - s * 0.45f, cy + s * 0.9f)
+        path.lineTo(cx - s * 0.45f, cy)
+        path.lineTo(cx - s, cy)
+        path.close()
+        canvas.drawPath(path, iconPaint)
+    }
+
+    // Backspace/Del key icon: simple left-pointing arrow with an X
+    private fun drawBackspaceIcon(canvas: Canvas, rect: Rect, color: Int) {
+        iconPaint.color = color
+        iconPaint.style = Paint.Style.STROKE
+        iconPaint.strokeWidth = dp(1.8f)
+        iconPaint.strokeCap = Paint.Cap.ROUND
+
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val s = minOf(rect.width(), rect.height()) * 0.20f
+
+        // Arrow body (pointed left, like a backspace key shape)
+        val bodyPath = android.graphics.Path()
+        bodyPath.moveTo(cx - s * 1.3f, cy)
+        bodyPath.lineTo(cx - s * 0.5f, cy - s)
+        bodyPath.lineTo(cx + s * 1.1f, cy - s)
+        bodyPath.lineTo(cx + s * 1.1f, cy + s)
+        bodyPath.lineTo(cx - s * 0.5f, cy + s)
+        bodyPath.close()
+        canvas.drawPath(bodyPath, iconPaint)
+
+        // X mark inside
+        val xOffset = s * 0.35f
+        canvas.drawLine(cx - xOffset, cy - xOffset * 0.7f, cx + xOffset, cy + xOffset * 0.7f, iconPaint)
+        canvas.drawLine(cx + xOffset, cy - xOffset * 0.7f, cx - xOffset, cy + xOffset * 0.7f, iconPaint)
+
+        iconPaint.style = Paint.Style.FILL // reset for next use
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -375,7 +431,13 @@ class KeyboardView @JvmOverloads constructor(
                 lastTouchedKey = label
                 animationEngine.triggerAnimation(rect.exactCenterX(), rect.exactCenterY(), label)
                 ripples.add(RippleEffect(rect.exactCenterX(), rect.exactCenterY()))
-                currentPopup = PopupEffect(label, rect.exactCenterX(), rect.top.toFloat() - dp(20f))
+                currentPopup = PopupEffect(
+                    label,
+                    rect.exactCenterX(),
+                    rect.top.toFloat() - dp(20f),
+                    rect.width().toFloat(),
+                    rect.height().toFloat()
+                )
                 pressedKeys[label] = System.currentTimeMillis()
                 postInvalidateOnAnimation()
 
@@ -466,7 +528,13 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    private inner class PopupEffect(private val lbl: String, private val px: Float, private val py: Float) {
+    private inner class PopupEffect(
+        private val lbl: String,
+        private val px: Float,
+        private val py: Float,
+        private val keyWidth: Float,
+        private val keyHeight: Float
+    ) {
         private var alp = 255
         private var offY = 10f
         var finished = false
@@ -485,8 +553,9 @@ class KeyboardView @JvmOverloads constructor(
             } else {
                 alp = (255 * (1 - (p - 0.2f) / 0.8f)).toInt()
             }
-            val pw = dp(36f) // Magnified popup width, density-independent
-            val ph = dp(28f) // Magnified popup height, density-independent
+            // Popup is 20% larger than the actual key button size
+            val pw = keyWidth * 1.2f
+            val ph = keyHeight * 1.2f
             popupPaint.alpha = alp
             canvas.drawRoundRect(px - pw / 2, py + offY, px + pw / 2, py + offY + ph, 15f, 15f, popupPaint)
             popupBorderPaint.alpha = alp
