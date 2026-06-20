@@ -450,16 +450,6 @@ class KeyboardView @JvmOverloads constructor(
             (panelLeft + panelW).toInt(), (row3Top + rowH).toInt()
         )
     }
-        val it = ripples.iterator()
-        while (it.hasNext()) {
-            val r = it.next()
-            r.update(dt)
-            r.draw(canvas)
-            if (r.finished) {
-                it.remove()
-            }
-        }
-    }
 
     private fun updateRipples(canvas: Canvas, dt: Long) {
         val it = ripples.iterator()
