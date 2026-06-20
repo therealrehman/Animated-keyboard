@@ -95,7 +95,21 @@ class KeyboardView @JvmOverloads constructor(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
         listOf("Shift", "z", "x", "c", "v", "b", "n", "m", "Del"),
-        listOf("123", "Settings", ",", "Space", ".", "Go")
+        listOf("123", "Settings", "اردو", "Space", ".", "Go")
+    )
+
+    // Urdu phonetic layout — each Urdu letter sits in the SAME physical key
+    // position as the Roman/English letter it phonetically matches, so muscle
+    // memory carries over (s -> س, d -> د, etc.), exactly as requested. This is
+    // the same approach used by CRULP's phonetic Urdu keyboard standard.
+    // Row/key count matches letterLayout exactly — same 5-row shape system used
+    // by every layout in this app.
+    private val urduLayout = listOf(
+        listOf("١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩", "٠"),
+        listOf("ق", "و", "ع", "ر", "ت", "ے", "ا", "ی", "ٹ", "پ"),
+        listOf("آ", "س", "د", "ف", "گ", "ھ", "ج", "ک", "ل"),
+        listOf("Shift", "ز", "ش", "چ", "ط", "ب", "ن", "م", "Del"),
+        listOf("123", "Settings", "EN", "Space", "۔", "Go")
     )
 
     // Symbol layout #1 (reached via "123") — SAME 5-row structure as letterLayout,
@@ -185,6 +199,8 @@ class KeyboardView @JvmOverloads constructor(
         keyCodes["ABC"] = -3
         keyCodes["Settings"] = -6
         keyCodes["=\\<"] = -7
+        keyCodes["اردو"] = -8
+        keyCodes["EN"] = -9
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -268,6 +284,7 @@ class KeyboardView @JvmOverloads constructor(
             "Space" -> 3.5f
             "Shift", "Del", "123", "ABC", "Go" -> 1.4f
             "=\\<" -> 1.6f
+            "اردو", "EN" -> 1.6f
             "Settings" -> 1.0f
             else -> 1.0f
         }
@@ -806,6 +823,16 @@ class KeyboardView @JvmOverloads constructor(
             }
             "=\\<" -> {
                 currentLayout = extendedSymbolLayout
+                createKeyMap(width, height)
+                postInvalidateOnAnimation()
+            }
+            "اردو" -> {
+                currentLayout = urduLayout
+                createKeyMap(width, height)
+                postInvalidateOnAnimation()
+            }
+            "EN" -> {
+                currentLayout = letterLayout
                 createKeyMap(width, height)
                 postInvalidateOnAnimation()
             }
