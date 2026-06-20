@@ -4,15 +4,16 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.RadialGradient
 import android.graphics.Rect
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import com.example.animatedkeyboard.audio.KeySoundEngine
+import com.example.animatedkeyboard.settings.KeyboardSettings
 import com.example.animatedkeyboard.utils.AnimationEngine
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -33,8 +34,26 @@ class KeyboardView @JvmOverloads constructor(
     private val handler = Handler(Looper.getMainLooper())
     private var backspaceRunnable: Runnable? = null
 
+    // Settings + sound engine — wired in but fully optional; keyboard works
+    // identically if these are never touched (defaults preserve current behavior).
+    private val settings by lazy { KeyboardSettings.getInstance(context) }
+    private val soundEngine by lazy { KeySoundEngine(context) }
+
     fun setOnCustomKeyListener(listener: OnKeyListener) {
         this.keyListener = listener
+    }
+
+    /**
+     * Releases native resources (sound engine) and cancels any pending callbacks.
+     * Must be called from the hosting IME's onDestroy() — see AnimatedKeyboardIME.
+     */
+    fun release() {
+        handler.removeCallbacks(backspaceRunnable ?: Runnable {})
+        soundEngine.release()
+    }
+
+    companion object {
+        private const val TAG = "KeyboardView"
     }
 
     // --- DP-based sizing system ---
@@ -57,9 +76,6 @@ class KeyboardView @JvmOverloads constructor(
     private val textPaint = Paint()
     private val animationEngine = AnimationEngine()
     private var lastFrameTime = 0L
-    private var fireGlowAlpha = 0.5f
-    private var fireGlowDirection = -1
-    private val fireGlowPaint = Paint()
     private val pressedKeys = mutableMapOf<String, Long>()
     private val keyStates = mutableMapOf<String, KeyState>()
     private val ripples = mutableListOf<RippleEffect>()
@@ -101,6 +117,18 @@ class KeyboardView @JvmOverloads constructor(
     init {
         setWillNotDraw(false)
         setBackgroundColor(Color.BLACK)
+
+        // ACCESSIBILITY LAYER (basic level):
+        // Marks this view as accessibility-relevant so TalkBack announces it exists.
+        // Full per-key accessibility (individual focusable nodes for each key) would
+        // require implementing AccessibilityNodeProvider — a significantly larger
+        // undertaking. This basic level ensures TalkBack users at least know a
+        // keyboard is present and can identify it, which is the minimum viable
+        // accessibility support. See "MISSING OPTIONAL RESOURCES" notes for the
+        // full per-key AccessibilityNodeProvider upgrade path.
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        contentDescription = "ChromaTap keyboard"
+
         keyPaint.color = Color.parseColor("#080808")
         keyPaint.isAntiAlias = true
         keyPaint.style = Paint.Style.FILL
@@ -113,7 +141,6 @@ class KeyboardView @JvmOverloads constructor(
         textPaint.isAntiAlias = true
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.typeface = Typeface.DEFAULT_BOLD
-        fireGlowPaint.isAntiAlias = true
         popupPaint.color = Color.parseColor("#1E1E1E")
         popupPaint.isAntiAlias = true
         popupBorderPaint.color = Color.WHITE
@@ -149,6 +176,24 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun createKeyMap(width: Int, height: Int) {
+        // ERROR HANDLING LAYER: Orientation changes, split-screen resizing, and
+        // foldable screen-fold events can deliver unusual (even momentarily zero)
+        // width/height values. Guard against degenerate input so we never divide
+        // by zero or produce a corrupt key map that would make the keyboard
+        // unusable until the next size change.
+        if (width <= 0 || height <= 0 || currentLayout.isEmpty()) {
+            Log.w(TAG, "createKeyMap skipped: invalid dimensions ($width x $height)")
+            return
+        }
+
+        try {
+            buildKeyMapInternal(width, height)
+        } catch (e: Exception) {
+            Log.e(TAG, "createKeyMap failed, keyMap may be incomplete: ${e.message}")
+        }
+    }
+
+    private fun buildKeyMapInternal(width: Int, height: Int) {
         keyMap.clear()
 
         val sideMargin = dp(sideMarginDp).toInt()
@@ -207,38 +252,56 @@ class KeyboardView @JvmOverloads constructor(
         lastFrameTime = now
 
         canvas.drawColor(Color.BLACK)
-        drawFireGlow(canvas)
-        animationEngine.update(dt)
-        animationEngine.draw(canvas)
-        updateRipples(canvas, dt)
-        updateKeyStates()
-        for ((label, rect) in keyMap) {
-            drawKey(canvas, label, rect)
-        }
-        currentPopup?.draw(canvas)
-        if (animationEngine.hasActiveAnimations() || ripples.isNotEmpty() || currentPopup != null) {
-            postInvalidateOnAnimation()
+
+        // ERROR HANDLING LAYER:
+        // Why this exists: onDraw runs on every single frame. Any uncaught exception
+        // here (e.g. a malformed Rect, a null Paint shader, an animation edge case)
+        // would crash the IME process, which force-closes the keyboard mid-typing in
+        // WHATEVER app the user currently has open (WhatsApp, browser, etc.) — a much
+        // worse experience than just losing the fancy animation for one frame.
+        // Recovery strategy: if the animated/decorated rendering path fails, we fall
+        // back to drawing plain, undecorated keys so the keyboard STAYS USABLE.
+        try {
+            animationEngine.update(dt)
+            animationEngine.draw(canvas)
+            updateRipples(canvas, dt)
+            updateKeyStates()
+            for ((label, rect) in keyMap) {
+                drawKey(canvas, label, rect)
+            }
+            currentPopup?.draw(canvas)
+            if (animationEngine.hasActiveAnimations() || ripples.isNotEmpty() || currentPopup != null) {
+                postInvalidateOnAnimation()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Rendering error in onDraw, falling back to plain keys: ${e.message}")
+            drawFallbackKeys(canvas)
         }
     }
 
-    private fun drawFireGlow(canvas: Canvas) {
-        fireGlowAlpha += fireGlowDirection * 0.005f
-        if (fireGlowAlpha <= 0.3f || fireGlowAlpha >= 0.7f) {
-            fireGlowDirection *= -1
+    /**
+     * Minimal, animation-free rendering of the keyboard grid.
+     * Used only as a crash-recovery fallback — see onDraw's try/catch above.
+     * Guarantees the user can still see and tap keys even if the decorated
+     * rendering pipeline (animations/ripples/popups) hits an unexpected error.
+     */
+    private fun drawFallbackKeys(canvas: Canvas) {
+        try {
+            for ((label, rect) in keyMap) {
+                canvas.drawRect(rect, keyPaint)
+                canvas.drawText(
+                    label,
+                    rect.exactCenterX(),
+                    rect.exactCenterY() + (textPaint.textSize / 3f),
+                    textPaint
+                )
+            }
+        } catch (e: Exception) {
+            // If even the fallback fails, there is nothing safe left to draw this frame.
+            // We deliberately swallow this rather than rethrow, since throwing here
+            // would still crash the IME — the one outcome this layer exists to prevent.
+            Log.e(TAG, "Fallback rendering also failed: ${e.message}")
         }
-        val cx = width / 2f
-        val cy = height.toFloat()
-        val a1 = (220 * fireGlowAlpha).toInt()
-        val a2 = (90 * fireGlowAlpha).toInt()
-        // 2 shades of orange only: bright orange center, deep orange edge
-        val colors = intArrayOf(
-            Color.argb(a1, 255, 140, 0),   // bright orange
-            Color.argb(a2, 200, 80, 0),    // deep orange
-            Color.TRANSPARENT
-        )
-        val pos = floatArrayOf(0f, 0.5f, 1f)
-        fireGlowPaint.shader = RadialGradient(cx, cy, width * 0.8f, colors, pos, Shader.TileMode.CLAMP)
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fireGlowPaint)
     }
 
     private fun updateRipples(canvas: Canvas, dt: Long) {
@@ -429,6 +492,17 @@ class KeyboardView @JvmOverloads constructor(
         for ((label, rect) in keyMap) {
             if (rect.contains(x.toInt(), y.toInt())) {
                 lastTouchedKey = label
+
+                // Haptic + sound feedback — both respect user settings and are
+                // purely additive; they do not affect the colored animation system.
+                if (settings.hapticEnabled) {
+                    performHapticFeedback(
+                        android.view.HapticFeedbackConstants.KEYBOARD_TAP,
+                        android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                    )
+                }
+                soundEngine.playClick()
+
                 animationEngine.triggerAnimation(rect.exactCenterX(), rect.exactCenterY(), label)
                 ripples.add(RippleEffect(rect.exactCenterX(), rect.exactCenterY()))
                 currentPopup = PopupEffect(
@@ -449,7 +523,7 @@ class KeyboardView @JvmOverloads constructor(
                         override fun run() {
                             if (isLongPress && longPressKey == "Del") {
                                 keyListener?.onKey(-5, "Del")
-                                handler.postDelayed(this, 50) // Repeat every 50ms
+                                handler.postDelayed(this, settings.backspaceRepeatIntervalMs)
                             }
                         }
                     }
@@ -472,6 +546,7 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     private fun commitKey(label: String) {
+        announceKeyForAccessibility(label)
         when (label) {
             "Shift" -> {
                 isShifted = !isShifted
@@ -500,6 +575,37 @@ class KeyboardView @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Announces the pressed key's label to TalkBack/screen readers, so visually
+     * impaired users get audio confirmation of what was typed — without this,
+     * a screen-reader user would have no feedback that their tap registered.
+     * Uses friendly names for control keys instead of raw internal labels.
+     */
+    private fun announceKeyForAccessibility(label: String) {
+        if (!isAccessibilityLiveRegionRelevant()) return
+        val spoken = when (label) {
+            "Del" -> "Backspace"
+            "Go" -> "Enter"
+            "Space" -> "Space"
+            "Shift" -> if (isShifted) "Shift off" else "Shift on"
+            "123" -> "Numbers"
+            "ABC" -> "Letters"
+            else -> label
+        }
+        try {
+            announceForAccessibility(spoken)
+        } catch (e: Exception) {
+            // Non-fatal: missing accessibility announcement should never block typing.
+            Log.w(TAG, "Accessibility announcement failed: ${e.message}")
+        }
+    }
+
+    private fun isAccessibilityLiveRegionRelevant(): Boolean {
+        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE)
+                as? android.view.accessibility.AccessibilityManager
+        return am?.isEnabled == true
     }
 
     private inner class RippleEffect(private val cx: Float, private val cy: Float) {
