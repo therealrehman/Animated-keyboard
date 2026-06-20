@@ -33,6 +33,7 @@ class KeyboardView @JvmOverloads constructor(
     private var keyListener: OnKeyListener? = null
     private val handler = Handler(Looper.getMainLooper())
     private var backspaceRunnable: Runnable? = null
+    private var capsLockRunnable: Runnable? = null
 
     // Settings + sound engine — wired in but fully optional; keyboard works
     // identically if these are never touched (defaults preserve current behavior).
@@ -49,6 +50,7 @@ class KeyboardView @JvmOverloads constructor(
      */
     fun release() {
         handler.removeCallbacks(backspaceRunnable ?: Runnable {})
+        handler.removeCallbacks(capsLockRunnable ?: Runnable {})
         soundEngine.release()
     }
 
@@ -76,6 +78,9 @@ class KeyboardView @JvmOverloads constructor(
     private val textPaint = Paint()
     private val animationEngine = AnimationEngine()
     private var lastFrameTime = 0L
+    private var glowPulse = 0.5f
+    private var glowDirection = -1
+    private val glowPaint = Paint()
     private val pressedKeys = mutableMapOf<String, Long>()
     private val keyStates = mutableMapOf<String, KeyState>()
     private val ripples = mutableListOf<RippleEffect>()
@@ -90,20 +95,38 @@ class KeyboardView @JvmOverloads constructor(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
         listOf("Shift", "z", "x", "c", "v", "b", "n", "m", "Del"),
-        listOf("123", ",", "Space", ".", "Go")
+        listOf("123", "Settings", ",", "Space", ".", "Go")
     )
 
+    // Symbol layout #1 (reached via "123") — SAME 5-row structure as letterLayout,
+    // just different key content. This is the actual fix for "symbol layout looks
+    // different": before, this had only 4 rows with a totally different shape.
     private val numberLayout = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
-        listOf("@", "#", "$", "%", "^", "&", "*", "(", ")", "_"),
-        listOf("+=", "ABC", ".", ",", "Del"),
-        listOf("Space", "Go")
+        listOf("@", "#", "$", "_", "&", "-", "+", "(", ")", "/"),
+        listOf("*", "\"", "'", ":", ";", "!", "?"),
+        listOf("=\\<", "%", "^", "[", "]", "{", "}", "Del"),
+        listOf("ABC", "Settings", ",", "Space", ".", "Go")
+    )
+
+    // Symbol layout #2 (reached via "=\<" toggle from numberLayout) — extended
+    // symbols, same 5-row shape again. This is what "+=" was supposed to open
+    // before: a second symbols page, not just a literal typed character.
+    private val extendedSymbolLayout = listOf(
+        listOf("~", "`", "|", "•", "√", "π", "÷", "×", "¶", "Δ"),
+        listOf("£", "¢", "€", "¥", "^", "°", "=", "{", "}", "\\"),
+        listOf("©", "®", "™", "✓", "[", "]", "<", ">"),
+        listOf("123", "_", "-", "+", "(", ")", "/", "Del"),
+        listOf("ABC", "Settings", ",", "Space", ".", "Go")
     )
 
     private var currentLayout = letterLayout
     private var isShifted = false
+    private var isCapsLocked = false
+    private var showSettingsPanel = false
     private val keyMap = mutableMapOf<String, Rect>()
     private val keyCodes = mutableMapOf<String, Int>()
+    private val settingsPanelTargets = mutableMapOf<String, Rect>()
     private var lastKeyTime = 0L
     private val debounceInterval = 100L
     private var touchStartX = 0f
@@ -113,6 +136,7 @@ class KeyboardView @JvmOverloads constructor(
     private var lastTouchedKey: String? = null
     private var isLongPress = false
     private var longPressKey: String? = null
+    private var capsLockJustActivated = false
 
     init {
         setWillNotDraw(false)
@@ -136,13 +160,14 @@ class KeyboardView @JvmOverloads constructor(
         keyBorderPaint.isAntiAlias = true
         keyBorderPaint.style = Paint.Style.STROKE
         keyBorderPaint.strokeWidth = dp(1f)
-        textPaint.color = Color.parseColor("#885500")
+        textPaint.color = Color.WHITE
         textPaint.textSize = dp(15f)
         textPaint.isAntiAlias = true
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.typeface = Typeface.DEFAULT_BOLD
         popupPaint.color = Color.parseColor("#1E1E1E")
         popupPaint.isAntiAlias = true
+        glowPaint.isAntiAlias = true
         popupBorderPaint.color = Color.WHITE
         popupBorderPaint.isAntiAlias = true
         popupBorderPaint.style = Paint.Style.STROKE
@@ -158,6 +183,8 @@ class KeyboardView @JvmOverloads constructor(
         keyCodes["Space"] = 32
         keyCodes["123"] = -2
         keyCodes["ABC"] = -3
+        keyCodes["Settings"] = -6
+        keyCodes["=\\<"] = -7
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -239,8 +266,9 @@ class KeyboardView @JvmOverloads constructor(
     private fun getWeight(label: String): Float {
         return when (label) {
             "Space" -> 3.5f
-            "Shift", "Del", "123", "ABC" -> 1.4f
-            "Go" -> 1.4f
+            "Shift", "Del", "123", "ABC", "Go" -> 1.4f
+            "=\\<" -> 1.6f
+            "Settings" -> 1.0f
             else -> 1.0f
         }
     }
@@ -252,6 +280,7 @@ class KeyboardView @JvmOverloads constructor(
         lastFrameTime = now
 
         canvas.drawColor(Color.BLACK)
+        drawCoolGlow(canvas)
 
         // ERROR HANDLING LAYER:
         // Why this exists: onDraw runs on every single frame. Any uncaught exception
@@ -270,9 +299,12 @@ class KeyboardView @JvmOverloads constructor(
                 drawKey(canvas, label, rect)
             }
             currentPopup?.draw(canvas)
-            if (animationEngine.hasActiveAnimations() || ripples.isNotEmpty() || currentPopup != null) {
-                postInvalidateOnAnimation()
+            if (showSettingsPanel) {
+                drawSettingsPanel(canvas)
             }
+            // Glow pulses continuously, so we always need another frame regardless
+            // of whether key animations/ripples/popups are active.
+            postInvalidateOnAnimation()
         } catch (e: Exception) {
             Log.e(TAG, "Rendering error in onDraw, falling back to plain keys: ${e.message}")
             drawFallbackKeys(canvas)
@@ -301,6 +333,131 @@ class KeyboardView @JvmOverloads constructor(
             // We deliberately swallow this rather than rethrow, since throwing here
             // would still crash the IME — the one outcome this layer exists to prevent.
             Log.e(TAG, "Fallback rendering also failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Subtle ambient background glow — purely decorative, sits BEHIND all keys
+     * and animations. Uses cool tones (blue/violet) specifically so it never
+     * visually competes with or muddies the White→Pink→Orange key-press
+     * animation, which remains the primary visual feedback system and is
+     * left completely untouched by this function.
+     */
+    private fun drawCoolGlow(canvas: Canvas) {
+        glowPulse += glowDirection * 0.004f
+        if (glowPulse <= 0.25f || glowPulse >= 0.55f) {
+            glowDirection *= -1
+        }
+        val cx = width / 2f
+        val cy = height.toFloat()
+        val a1 = (70 * glowPulse).toInt()
+        val a2 = (35 * glowPulse).toInt()
+        val colors = intArrayOf(
+            Color.argb(a1, 60, 90, 255),   // cool blue
+            Color.argb(a2, 130, 60, 220),  // soft violet
+            Color.TRANSPARENT
+        )
+        val pos = floatArrayOf(0f, 0.55f, 1f)
+        glowPaint.shader = android.graphics.RadialGradient(
+            cx, cy, width * 0.75f, colors, pos, android.graphics.Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), glowPaint)
+    }
+
+    /**
+     * Fix #5 (Settings button request): draws a small overlay panel with toggles
+     * for vibration (haptic) and sound. Lives entirely inside KeyboardView so no
+     * separate Activity/Fragment/dialog is needed — keeps everything in one IME
+     * surface, which is the correct pattern since a true Dialog cannot be shown
+     * from an InputMethodService's input view.
+     */
+    private fun drawSettingsPanel(canvas: Canvas) {
+        settingsPanelTargets.clear()
+
+        val panelW = width * 0.7f
+        val panelH = dp(90f)
+        val panelLeft = (width - panelW) / 2f
+        val panelTop = (height - panelH) / 2f
+
+        val bgPaint = Paint().apply {
+            color = Color.parseColor("#1A1A1A")
+            isAntiAlias = true
+        }
+        val borderPaint = Paint().apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.2f)
+            isAntiAlias = true
+        }
+        val labelPaint = Paint().apply {
+            color = Color.WHITE
+            textSize = dp(13f)
+            isAntiAlias = true
+            textAlign = Paint.Align.LEFT
+            isFakeBoldText = true
+        }
+        val valuePaint = Paint().apply {
+            isAntiAlias = true
+            textSize = dp(13f)
+            textAlign = Paint.Align.RIGHT
+            isFakeBoldText = true
+        }
+
+        // Dim background behind the panel so it reads as a modal overlay
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), Paint().apply {
+            color = Color.argb(150, 0, 0, 0)
+        })
+
+        canvas.drawRoundRect(panelLeft, panelTop, panelLeft + panelW, panelTop + panelH, dp(10f), dp(10f), bgPaint)
+        canvas.drawRoundRect(panelLeft, panelTop, panelLeft + panelW, panelTop + panelH, dp(10f), dp(10f), borderPaint)
+
+        val rowH = panelH / 3f
+        val padX = dp(14f)
+
+        // Row 1: Vibration toggle
+        val row1Top = panelTop
+        canvas.drawText("Vibration", panelLeft + padX, row1Top + rowH / 2f + dp(4f), labelPaint)
+        valuePaint.color = if (settings.hapticEnabled) Color.parseColor("#4CD964") else Color.parseColor("#888888")
+        canvas.drawText(
+            if (settings.hapticEnabled) "ON" else "OFF",
+            panelLeft + panelW - padX, row1Top + rowH / 2f + dp(4f), valuePaint
+        )
+        settingsPanelTargets["toggle_haptic"] = Rect(
+            panelLeft.toInt(), row1Top.toInt(),
+            (panelLeft + panelW).toInt(), (row1Top + rowH).toInt()
+        )
+
+        // Row 2: Sound toggle
+        val row2Top = panelTop + rowH
+        canvas.drawText("Sound", panelLeft + padX, row2Top + rowH / 2f + dp(4f), labelPaint)
+        valuePaint.color = if (settings.soundEnabled) Color.parseColor("#4CD964") else Color.parseColor("#888888")
+        canvas.drawText(
+            if (settings.soundEnabled) "ON" else "OFF",
+            panelLeft + panelW - padX, row2Top + rowH / 2f + dp(4f), valuePaint
+        )
+        settingsPanelTargets["toggle_sound"] = Rect(
+            panelLeft.toInt(), row2Top.toInt(),
+            (panelLeft + panelW).toInt(), (row2Top + rowH).toInt()
+        )
+
+        // Row 3: Close button
+        val row3Top = panelTop + rowH * 2
+        labelPaint.textAlign = Paint.Align.CENTER
+        labelPaint.color = Color.parseColor("#FF6464")
+        canvas.drawText("Close", panelLeft + panelW / 2f, row3Top + rowH / 2f + dp(4f), labelPaint)
+        settingsPanelTargets["close_panel"] = Rect(
+            panelLeft.toInt(), row3Top.toInt(),
+            (panelLeft + panelW).toInt(), (row3Top + rowH).toInt()
+        )
+    }
+        val it = ripples.iterator()
+        while (it.hasNext()) {
+            val r = it.next()
+            r.update(dt)
+            r.draw(canvas)
+            if (r.finished) {
+                it.remove()
+            }
         }
     }
 
@@ -356,7 +513,7 @@ class KeyboardView @JvmOverloads constructor(
             }
             KeyState.NORMAL -> {
                 keyPaint.color = Color.parseColor("#080808")
-                textPaint.color = Color.parseColor("#885500")
+                textPaint.color = Color.WHITE
                 keyPaint.clearShadowLayer()
             }
         }
@@ -378,8 +535,42 @@ class KeyboardView @JvmOverloads constructor(
         when (label) {
             "Shift" -> drawShiftIcon(canvas, rect, textPaint.color)
             "Del" -> drawBackspaceIcon(canvas, rect, textPaint.color)
+            "Settings" -> drawSettingsIcon(canvas, rect)
             else -> canvas.drawText(dl, rect.exactCenterX(), rect.exactCenterY() + (textPaint.textSize / 3f), textPaint)
         }
+    }
+
+    // Settings key icon: simple gear/cog shape drawn with small teeth around a circle
+    private fun drawSettingsIcon(canvas: Canvas, rect: Rect) {
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val outerR = minOf(rect.width(), rect.height()) * 0.22f
+        val innerR = outerR * 0.45f
+
+        iconPaint.color = Color.WHITE
+        iconPaint.style = Paint.Style.FILL
+
+        // Gear teeth (8 small rectangles around the circle)
+        for (i in 0 until 8) {
+            val angle = Math.toRadians((i * 45).toDouble())
+            canvas.save()
+            canvas.rotate((i * 45).toFloat(), cx, cy)
+            canvas.drawRect(
+                cx - dp(1.2f), cy - outerR - dp(2f),
+                cx + dp(1.2f), cy - outerR + dp(2.5f),
+                iconPaint
+            )
+            canvas.restore()
+        }
+
+        // Outer ring
+        iconPaint.style = Paint.Style.STROKE
+        iconPaint.strokeWidth = dp(1.6f)
+        canvas.drawCircle(cx, cy, outerR, iconPaint)
+
+        // Inner hole
+        iconPaint.style = Paint.Style.FILL
+        canvas.drawCircle(cx, cy, innerR, iconPaint)
     }
 
     private val iconPaint = Paint().apply {
@@ -389,7 +580,8 @@ class KeyboardView @JvmOverloads constructor(
 
     // Shift key icon: simple upward-pointing arrow (caps-lock style arrow)
     private fun drawShiftIcon(canvas: Canvas, rect: Rect, color: Int) {
-        iconPaint.color = if (isShifted) Color.parseColor("#FFCC00") else color
+        // Caps lock active = bright white (filled); normal = same white as other keys but dimmer when off
+        iconPaint.color = if (isCapsLocked) Color.WHITE else if (isShifted) Color.WHITE else Color.parseColor("#AAAAAA")
         val cx = rect.exactCenterX()
         val cy = rect.exactCenterY()
         val s = minOf(rect.width(), rect.height()) * 0.22f // icon scale
@@ -437,6 +629,14 @@ class KeyboardView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // When the settings panel is open, it captures all touches — the underlying
+        // keyboard keys must not receive taps "through" the modal overlay.
+        if (showSettingsPanel) {
+            if (event.action == MotionEvent.ACTION_UP) {
+                handleSettingsPanelTap(event.x, event.y)
+            }
+            return true
+        }
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 touchStartX = event.x
@@ -463,13 +663,18 @@ class KeyboardView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 handler.removeCallbacks(backspaceRunnable ?: Runnable {})
+                handler.removeCallbacks(capsLockRunnable ?: Runnable {})
                 if (!isSwiping && lastTouchedKey != null) {
                     val now = System.currentTimeMillis()
-                    if (now - lastKeyTime > debounceInterval) {
+                    // If long-press already activated Caps Lock during this touch,
+                    // skip commitKey for Shift so it doesn't immediately toggle back off.
+                    val skipDueToCapsLockJustActivated = lastTouchedKey == "Shift" && capsLockJustActivated
+                    if (now - lastKeyTime > debounceInterval && !skipDueToCapsLockJustActivated) {
                         lastKeyTime = now
                         commitKey(lastTouchedKey!!)
                     }
                 }
+                capsLockJustActivated = false
                 lastTouchedKey = null
                 isSwiping = false
                 isLongPress = false
@@ -478,6 +683,8 @@ class KeyboardView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(backspaceRunnable ?: Runnable {})
+                handler.removeCallbacks(capsLockRunnable ?: Runnable {})
+                capsLockJustActivated = false
                 lastTouchedKey = null
                 isSwiping = false
                 isLongPress = false
@@ -486,6 +693,24 @@ class KeyboardView @JvmOverloads constructor(
             }
         }
         return super.onTouchEvent(event)
+    }
+
+    private fun handleSettingsPanelTap(x: Float, y: Float) {
+        for ((key, rect) in settingsPanelTargets) {
+            if (rect.contains(x.toInt(), y.toInt())) {
+                when (key) {
+                    "toggle_haptic" -> settings.hapticEnabled = !settings.hapticEnabled
+                    "toggle_sound" -> settings.soundEnabled = !settings.soundEnabled
+                    "close_panel" -> showSettingsPanel = false
+                }
+                postInvalidateOnAnimation()
+                return
+            }
+        }
+        // Tap outside any row but still inside the dimmed overlay — close the panel,
+        // matching standard "tap outside to dismiss" modal behavior.
+        showSettingsPanel = false
+        postInvalidateOnAnimation()
     }
 
     private fun handleTouchDown(x: Float, y: Float) {
@@ -529,6 +754,24 @@ class KeyboardView @JvmOverloads constructor(
                     }
                     handler.postDelayed(backspaceRunnable!!, 500) // Start after 500ms long press
                 }
+
+                // Fix #4: Long-press Shift activates Caps Lock (held-down state),
+                // matching standard keyboard behavior. A normal tap (handled in
+                // commitKey) still does one-shot Shift; only a sustained press
+                // upgrades it to Caps Lock.
+                if (label == "Shift") {
+                    isLongPress = true
+                    longPressKey = label
+                    capsLockRunnable = Runnable {
+                        if (isLongPress && longPressKey == "Shift") {
+                            isCapsLocked = true
+                            isShifted = true
+                            capsLockJustActivated = true
+                            postInvalidateOnAnimation()
+                        }
+                    }
+                    handler.postDelayed(capsLockRunnable!!, 400)
+                }
                 break
             }
         }
@@ -549,7 +792,13 @@ class KeyboardView @JvmOverloads constructor(
         announceKeyForAccessibility(label)
         when (label) {
             "Shift" -> {
-                isShifted = !isShifted
+                if (isCapsLocked) {
+                    // Single tap while caps-locked turns everything off
+                    isCapsLocked = false
+                    isShifted = false
+                } else {
+                    isShifted = !isShifted
+                }
                 postInvalidateOnAnimation()
             }
             "Del" -> keyListener?.onKey(-5, "Del")
@@ -565,11 +814,23 @@ class KeyboardView @JvmOverloads constructor(
                 createKeyMap(width, height)
                 postInvalidateOnAnimation()
             }
+            "=\\<" -> {
+                currentLayout = extendedSymbolLayout
+                createKeyMap(width, height)
+                postInvalidateOnAnimation()
+            }
+            "Settings" -> {
+                showSettingsPanel = !showSettingsPanel
+                postInvalidateOnAnimation()
+            }
             else -> {
-                val fl = if (isShifted && label.length == 1 && label[0].isLetter()) label.uppercase() else label
+                val fl = if ((isShifted || isCapsLocked) && label.length == 1 && label[0].isLetter()) {
+                    label.uppercase()
+                } else label
                 keyListener?.onKey(fl.hashCode(), fl)
 
-                if (isShifted && label[0].isLetter()) {
+                // Caps lock stays on after a letter; one-shot shift turns off after one letter.
+                if (isShifted && !isCapsLocked && label.isNotEmpty() && label[0].isLetter()) {
                     isShifted = false
                     postInvalidateOnAnimation()
                 }
